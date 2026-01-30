@@ -1,0 +1,58 @@
+{
+  "name": "trading-backend-foundation",
+  "version": "1.0.0",
+  "description": "Production-ready backend foundation for a trading system",
+  "main": "dist/app.js",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "lint": "eslint src/**/*.ts",
+    "format": "prettier --write .",
+    "test": "vitest",
+    "test:candles": "tsx src/test-candles.ts",
+    "test:candles:fresh": "tsx src/test-candles-fresh.ts",
+    "test:features": "tsx src/test-repository-features.ts",
+    "query:candles": "tsx src/query-candles.ts",
+    "gold:setup": "tsx src/test-gold-data.ts",
+    "gold:monitor": "tsx src/gold-monitor.ts",
+    "query:gold": "tsx src/query-gold.ts",
+    "indicators:setup": "tsx src/database/setup-indicators.ts setup",
+    "indicators:verify": "tsx src/database/setup-indicators.ts verify",
+    "indicators:drop": "tsx src/database/setup-indicators.ts drop",
+    "indicators:test": "tsx src/scripts/test-indicator-setup.ts",
+    "test:position-lifecycle": "tsx src/execution/position-lifecycle/tests/run-tests.ts"
+  },
+  "keywords": [
+    "trading",
+    "backend",
+    "typescript",
+    "fastify"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "@vitest/coverage-v8": "^1.0.0",
+    "eslint": "^8.54.0",
+    "eslint-config-prettier": "^9.0.0",
+    "eslint-plugin-prettier": "^5.0.1",
+    "fast-check": "^3.23.2",
+    "prettier": "^3.1.0",
+    "tsx": "^4.6.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
+  },
+  "dependencies": {
+    "@fastify/websocket": "^11.2.0",
+    "@supabase/supabase-js": "^2.90.1",
+    "commander": "^14.0.2",
+    "dotenv": "^16.3.0",
+    "fastify": "^4.24.0",
+    "pino": "^8.16.0",
+    "pino-pretty": "^10.2.0"
+  }
+}
