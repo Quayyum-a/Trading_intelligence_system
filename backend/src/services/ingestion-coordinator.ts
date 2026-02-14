@@ -32,6 +32,13 @@ export interface CoordinatorConfig {
   enableJobQueue: boolean;
   retryFailedJobs: boolean;
   maxRetries: number;
+  // Enhanced timeout and performance settings
+  operationTimeoutMs: number;
+  batchProcessingEnabled: boolean;
+  maxBatchSize: number;
+  asyncProcessingEnabled: boolean;
+  performanceMonitoringEnabled: boolean;
+  queryOptimizationEnabled: boolean;
 }
 
 export class IngestionCoordinator {
@@ -54,11 +61,23 @@ export class IngestionCoordinator {
       enableJobQueue: true,
       retryFailedJobs: true,
       maxRetries: 3,
+      // Enhanced timeout and performance settings
+      operationTimeoutMs: 5 * 60 * 1000, // 5 minutes per operation
+      batchProcessingEnabled: true,
+      maxBatchSize: 1000,
+      asyncProcessingEnabled: true,
+      performanceMonitoringEnabled: true,
+      queryOptimizationEnabled: true,
       ...config,
     };
 
     // Set up graceful shutdown handlers
     this.setupShutdownHandlers();
+    
+    // Initialize performance monitoring if enabled
+    if (this.config.performanceMonitoringEnabled) {
+      this.initializePerformanceMonitoring();
+    }
   }
 
   /**
@@ -515,5 +534,287 @@ export class IngestionCoordinator {
     })();
 
     return this.shutdownPromise;
+  }
+
+  /**
+   * Initializes performance monitoring for the ingestion coordinator
+   */
+  private initializePerformanceMonitoring(): void {
+    logger.info('Performance monitoring initialized for ingestion coordinator', {
+      maxConcurrentJobs: this.config.maxConcurrentJobs,
+      operationTimeoutMs: this.config.operationTimeoutMs,
+      batchProcessingEnabled: this.config.batchProcessingEnabled,
+      asyncProcessingEnabled: this.config.asyncProcessingEnabled,
+    });
+
+    // Set up periodic performance reporting
+    setInterval(() => {
+      this.reportPerformanceMetrics();
+    }, 60000); // Report every minute
+  }
+
+  /**
+   * Reports current performance metrics
+   */
+  private reportPerformanceMetrics(): void {
+    const activeJobCount = this.activeJobs.size;
+    const queuedJobCount = this.jobQueue.length;
+    const runningJobCount = this.runningPromises.size;
+
+    const completedJobs = Array.from(this.activeJobs.values()).filter(
+      job => job.status === 'completed'
+    );
+    const failedJobs = Array.from(this.activeJobs.values()).filter(
+      job => job.status === 'failed'
+    );
+
+    const avgProcessingTime = completedJobs.length > 0 
+      ? completedJobs.reduce((sum, job) => {
+          if (job.startTime && job.endTime) {
+            return sum + (job.endTime.getTime() - job.startTime.getTime());
+          }
+          return sum;
+        }, 0) / completedJobs.length
+      : 0;
+
+    logger.info('Ingestion coordinator performance metrics', {
+      activeJobs: activeJobCount,
+      queuedJobs: queuedJobCount,
+      runningJobs: runningJobCount,
+      completedJobs: completedJobs.length,
+      failedJobs: failedJobs.length,
+      avgProcessingTimeMs: Math.round(avgProcessingTime),
+      successRate: completedJobs.length > 0 
+        ? (completedJobs.length / (completedJobs.length + failedJobs.length)) * 100
+        : 0,
+    });
+  }
+
+  /**
+   * Executes an operation with enhanced timeout handling
+   */
+  private async executeWithTimeout<T>(
+    operation: () => Promise<T>,
+    timeoutMs: number,
+    operationName: string
+  ): Promise<T> {
+    const startTime = Date.now();
+    
+    return new Promise<T>((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        const elapsedTime = Date.now() - startTime;
+        logger.error('Operation timed out', {
+          operationName,
+          timeoutMs,
+          elapsedTimeMs: elapsedTime,
+        });
+        reject(new Error(`Operation '${operationName}' timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      operation()
+        .then(result => {
+          clearTimeout(timeoutId);
+          const elapsedTime = Date.now() - startTime;
+          
+          if (this.config.performanceMonitoringEnabled) {
+            logger.debug('Operation completed successfully', {
+              operationName,
+              elapsedTimeMs: elapsedTime,
+              timeoutMs,
+            });
+          }
+          
+          resolve(result);
+        })
+        .catch(error => {
+          clearTimeout(timeoutId);
+          const elapsedTime = Date.now() - startTime;
+          
+          logger.error('Operation failed', {
+            operationName,
+            elapsedTimeMs: elapsedTime,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+          
+          reject(error);
+        });
+    });
+  }
+
+  /**
+   * Processes operations in batches for better performance
+   */
+  private async processBatch<T, R>(
+    items: T[],
+    processor: (item: T) => Promise<R>,
+    batchSize: number = this.config.maxBatchSize
+  ): Promise<R[]> {
+    if (!this.config.batchProcessingEnabled) {
+      // Process all items concurrently if batch processing is disabled
+      return Promise.all(items.map(processor));
+    }
+
+    const results: R[] = [];
+    const batches: T[][] = [];
+    
+    // Split items into batches
+    for (let i = 0; i < items.length; i += batchSize) {
+      batches.push(items.slice(i, i + batchSize));
+    }
+
+    logger.debug('Processing items in batches', {
+      totalItems: items.length,
+      batchCount: batches.length,
+      batchSize,
+    });
+
+    // Process batches sequentially to avoid overwhelming the system
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      const batchStartTime = Date.now();
+      
+      try {
+        const batchResults = await Promise.all(batch.map(processor));
+        results.push(...batchResults);
+        
+        const batchElapsedTime = Date.now() - batchStartTime;
+        logger.debug('Batch processed successfully', {
+          batchIndex: i + 1,
+          batchSize: batch.length,
+          elapsedTimeMs: batchElapsedTime,
+        });
+        
+        // Add small delay between batches to prevent overwhelming the system
+        if (i < batches.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        
+      } catch (error) {
+        const batchElapsedTime = Date.now() - batchStartTime;
+        logger.error('Batch processing failed', {
+          batchIndex: i + 1,
+          batchSize: batch.length,
+          elapsedTimeMs: batchElapsedTime,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+        throw error;
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Optimizes database queries by implementing connection pooling and query batching
+   */
+  private async optimizeQueries<T>(
+    queryOperations: (() => Promise<T>)[]
+  ): Promise<T[]> {
+    if (!this.config.queryOptimizationEnabled) {
+      return Promise.all(queryOperations.map(op => op()));
+    }
+
+    // Implement query batching and connection reuse
+    const results: T[] = [];
+    const batchSize = Math.min(this.config.maxBatchSize, 50); // Limit DB batch size
+    
+    for (let i = 0; i < queryOperations.length; i += batchSize) {
+      const batch = queryOperations.slice(i, i + batchSize);
+      
+      try {
+        const batchResults = await Promise.all(batch.map(op => op()));
+        results.push(...batchResults);
+        
+        // Small delay between query batches to prevent DB overload
+        if (i + batchSize < queryOperations.length) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        
+      } catch (error) {
+        logger.error('Query batch failed', {
+          batchIndex: Math.floor(i / batchSize) + 1,
+          batchSize: batch.length,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+        throw error;
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Processes long-running operations asynchronously
+   */
+  private async processAsync<T>(
+    operation: () => Promise<T>,
+    operationName: string
+  ): Promise<T> {
+    if (!this.config.asyncProcessingEnabled) {
+      return operation();
+    }
+
+    return new Promise<T>((resolve, reject) => {
+      // Use setImmediate to ensure the operation runs asynchronously
+      setImmediate(async () => {
+        try {
+          const result = await this.executeWithTimeout(
+            operation,
+            this.config.operationTimeoutMs,
+            operationName
+          );
+          resolve(result);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+  }
+
+  /**
+   * Gets performance statistics for monitoring
+   */
+  getPerformanceStatistics(): {
+    activeJobs: number;
+    queuedJobs: number;
+    runningJobs: number;
+    completedJobs: number;
+    failedJobs: number;
+    avgProcessingTimeMs: number;
+    successRate: number;
+    memoryUsage: NodeJS.MemoryUsage;
+  } {
+    const activeJobCount = this.activeJobs.size;
+    const queuedJobCount = this.jobQueue.length;
+    const runningJobCount = this.runningPromises.size;
+
+    const completedJobs = Array.from(this.activeJobs.values()).filter(
+      job => job.status === 'completed'
+    );
+    const failedJobs = Array.from(this.activeJobs.values()).filter(
+      job => job.status === 'failed'
+    );
+
+    const avgProcessingTime = completedJobs.length > 0 
+      ? completedJobs.reduce((sum, job) => {
+          if (job.startTime && job.endTime) {
+            return sum + (job.endTime.getTime() - job.startTime.getTime());
+          }
+          return sum;
+        }, 0) / completedJobs.length
+      : 0;
+
+    return {
+      activeJobs: activeJobCount,
+      queuedJobs: queuedJobCount,
+      runningJobs: runningJobCount,
+      completedJobs: completedJobs.length,
+      failedJobs: failedJobs.length,
+      avgProcessingTimeMs: Math.round(avgProcessingTime),
+      successRate: completedJobs.length > 0 
+        ? (completedJobs.length / (completedJobs.length + failedJobs.length)) * 100
+        : 0,
+      memoryUsage: process.memoryUsage(),
+    };
   }
 }

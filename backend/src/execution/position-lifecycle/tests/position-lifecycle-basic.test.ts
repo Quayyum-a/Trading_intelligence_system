@@ -24,8 +24,8 @@ describe('🔧 POSITION LIFECYCLE ENGINE - BASIC TESTS', () => {
     console.log('🧪 Setting up basic position lifecycle tests...');
     
     const config: PositionLifecycleEngineConfig = {
-      supabaseUrl: process.env.SUPABASE_URL || 'http://localhost:54321',
-      supabaseKey: process.env.SUPABASE_ANON_KEY || 'test-key',
+      supabaseUrl: process.env.SUPABASE_URL!,
+      supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
       paperTradingConfig: {
         slippageEnabled: false, // Disable for faster testing
         maxSlippageBps: 0,

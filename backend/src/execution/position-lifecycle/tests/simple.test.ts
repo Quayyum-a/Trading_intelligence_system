@@ -11,11 +11,11 @@ describe('Simple Position Lifecycle Engine Test', () => {
     console.log('🧪 Running simple position lifecycle engine test...');
     console.log('Environment variables:');
     console.log('SUPABASE_URL:', process.env.SUPABASE_URL);
-    console.log('SUPABASE_ANON_KEY:', process.env.SUPABASE_ANON_KEY ? 'SET' : 'NOT SET');
+    console.log('SUPABASE_SERVICE_ROLE_KEY:', process.env.SUPABASE_SERVICE_ROLE_KEY ? 'SET' : 'NOT SET');
 
     const config: PositionLifecycleEngineConfig = {
       supabaseUrl: process.env.SUPABASE_URL!,
-      supabaseKey: process.env.SUPABASE_ANON_KEY!,
+      supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
       paperTradingConfig: {
         slippageEnabled: true,
         maxSlippageBps: 5,

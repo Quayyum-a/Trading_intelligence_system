@@ -11,6 +11,11 @@ import {
 } from '../repositories/candle.repository.js';
 import { logger } from '../config/logger.js';
 import { performanceMonitor } from '../utils/performance-monitor.js';
+import { 
+  errorRecoveryService, 
+  RecoveryContext,
+  ErrorClassification 
+} from './error-recovery.service.js';
 
 /**
  * Candle Ingestion Service
@@ -286,7 +291,7 @@ export class CandleIngestionService {
   }
 
   /**
-   * Fetches candles from broker with retry logic
+   * Fetches candles from broker with enhanced error recovery
    */
   private async fetchCandlesWithRetry(
     pair: string,
@@ -295,63 +300,93 @@ export class CandleIngestionService {
     toDate: Date,
     maxRetries: number
   ) {
-    let lastError: Error | null = null;
+    const operationId = `fetch_candles_${pair}_${timeframe}_${Date.now()}`;
+    
+    const context: RecoveryContext = {
+      operationId,
+      operationType: 'fetch_candles',
+      attemptCount: 0,
+      startTime: new Date(),
+      metadata: {
+        pair,
+        timeframe,
+        fromDate: fromDate.toISOString(),
+        toDate: toDate.toISOString(),
+        endpoint: `/v3/instruments/${pair}/candles`,
+        broker: this.broker.getBrokerName(),
+      },
+    };
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const operation = async () => {
+      logger.debug('Fetching candles from broker', {
+        pair,
+        timeframe,
+        fromDate: fromDate.toISOString(),
+        toDate: toDate.toISOString(),
+        broker: this.broker.getBrokerName(),
+      });
+
+      return await this.broker.fetchCandles(
+        pair,
+        timeframe,
+        fromDate,
+        toDate
+      );
+    };
+
+    try {
+      // First attempt without error recovery
+      return await operation();
+    } catch (error) {
+      const brokerError = error instanceof Error ? error : new Error('Unknown broker error');
+      context.lastError = brokerError;
+      
+      logger.info('Initial fetch failed, initiating error recovery', {
+        operationId,
+        error: brokerError.message,
+        broker: this.broker.getBrokerName(),
+      });
+
+      // Classify the error and execute recovery strategy
+      const classification = errorRecoveryService.classifyError(brokerError);
+      
+      logger.debug('Error classified for recovery', {
+        operationId,
+        classification,
+      });
+
       try {
-        logger.debug('Fetching candles from broker', {
-          pair,
-          timeframe,
-          fromDate: fromDate.toISOString(),
-          toDate: toDate.toISOString(),
-          attempt,
-          maxRetries,
-          broker: this.broker.getBrokerName(),
-        });
-
-        const candles = await this.broker.fetchCandles(
-          pair,
-          timeframe,
-          fromDate,
-          toDate
+        const { result, recoveryResult } = await errorRecoveryService.executeRecovery(
+          context,
+          operation,
+          classification
         );
 
-        if (attempt > 1) {
-          logger.info('Broker fetch succeeded after retry', {
-            pair,
-            timeframe,
-            attempt,
-            candleCount: candles.length,
-          });
-        }
+        logger.info('Error recovery completed successfully', {
+          operationId,
+          strategy: recoveryResult.strategy,
+          attemptCount: recoveryResult.attemptCount,
+          totalTimeMs: recoveryResult.totalTimeMs,
+          candleCount: result.length,
+        });
 
-        return candles;
-      } catch (error) {
-        lastError =
-          error instanceof Error ? error : new Error('Unknown broker error');
-
-        logger.warn('Broker fetch attempt failed', {
-          pair,
-          timeframe,
-          attempt,
-          maxRetries,
-          error: lastError.message,
+        return result;
+      } catch (recoveryError) {
+        const finalError = recoveryError instanceof Error ? recoveryError : new Error('Recovery failed');
+        
+        logger.error('Error recovery failed', {
+          operationId,
+          originalError: brokerError.message,
+          recoveryError: finalError.message,
           broker: this.broker.getBrokerName(),
         });
 
-        if (attempt < maxRetries) {
-          // Wait before retry (exponential backoff)
-          const waitTime = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
-          logger.debug('Waiting before retry', { waitTime, attempt });
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-        }
+        throw new IngestionError(
+          `Failed to fetch candles after error recovery: ${finalError.message}`,
+          finalError
+        );
       }
     }
-
-    throw new IngestionError(
-      `Failed to fetch candles after ${maxRetries} attempts: ${lastError?.message}`,
-      lastError
-    );
   }
 
   /**
@@ -409,8 +444,12 @@ export class CandleIngestionService {
       });
 
       try {
-        const batchResult =
-          await this.candleRepository.insertNormalizedCandles(batch);
+        // Add timeout handling for database operations
+        const batchResult = await this.executeWithTimeout(
+          () => this.candleRepository.insertNormalizedCandles(batch),
+          30000, // 30 second timeout for database operations
+          `batch_insert_${Math.floor(i / optimizedBatchSize) + 1}`
+        );
         results.push(batchResult);
 
         if (batchResult.errors.length > 0) {
@@ -803,12 +842,15 @@ export class CandleIngestionService {
     };
 
     try {
-      // Get the latest candle timestamp from the database
-      const latestTimestamp =
-        await this.candleRepository.getLatestCandleTimestamp(
+      // Get the latest candle timestamp from the database with timeout
+      const latestTimestamp = await this.executeWithTimeout(
+        () => this.candleRepository.getLatestCandleTimestamp(
           config.pair,
           config.timeframe
-        );
+        ),
+        10000, // 10 second timeout for timestamp query
+        'get_latest_timestamp'
+      );
 
       result.lastKnownTimestamp = latestTimestamp;
 
@@ -1084,22 +1126,124 @@ export class CandleIngestionService {
   }
 
   /**
-   * Validates broker connection
+   * Validates broker connection with error recovery
    */
   async validateBrokerConnection(): Promise<boolean> {
+    const operationId = `validate_connection_${this.broker.getBrokerName()}_${Date.now()}`;
+    
+    const context: RecoveryContext = {
+      operationId,
+      operationType: 'validate_connection',
+      attemptCount: 0,
+      startTime: new Date(),
+      metadata: {
+        broker: this.broker.getBrokerName(),
+      },
+    };
+
+    const operation = async () => {
+      return await this.broker.validateConnection();
+    };
+
     try {
-      const isValid = await this.broker.validateConnection();
+      // First attempt without error recovery
+      const isValid = await operation();
       logger.info('Broker connection validation result', {
         broker: this.broker.getBrokerName(),
         isValid,
       });
       return isValid;
     } catch (error) {
-      logger.error('Broker connection validation failed', {
+      const brokerError = error instanceof Error ? error : new Error('Unknown connection error');
+      context.lastError = brokerError;
+      
+      logger.warn('Initial connection validation failed, initiating error recovery', {
+        operationId,
+        error: brokerError.message,
         broker: this.broker.getBrokerName(),
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
-      return false;
+
+      // Classify the error and execute recovery strategy
+      const classification = errorRecoveryService.classifyError(brokerError);
+      
+      try {
+        const { result, recoveryResult } = await errorRecoveryService.executeRecovery(
+          context,
+          operation,
+          classification
+        );
+
+        logger.info('Connection validation recovery completed', {
+          operationId,
+          strategy: recoveryResult.strategy,
+          isValid: result,
+          totalTimeMs: recoveryResult.totalTimeMs,
+        });
+
+        return result;
+      } catch (recoveryError) {
+        logger.error('Broker connection validation failed after recovery', {
+          operationId,
+          broker: this.broker.getBrokerName(),
+          originalError: brokerError.message,
+          recoveryError: recoveryError instanceof Error ? recoveryError.message : 'Unknown error',
+        });
+        return false;
+      }
     }
+  }
+
+  /**
+   * Executes an operation with timeout handling for performance optimization
+   */
+  private async executeWithTimeout<T>(
+    operation: () => Promise<T>,
+    timeoutMs: number,
+    operationName: string
+  ): Promise<T> {
+    const startTime = Date.now();
+    
+    return new Promise<T>((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        const elapsedTime = Date.now() - startTime;
+        logger.error('Database operation timed out', {
+          operationName,
+          timeoutMs,
+          elapsedTimeMs: elapsedTime,
+          broker: this.broker.getBrokerName(),
+        });
+        reject(new Error(`Database operation '${operationName}' timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      operation()
+        .then(result => {
+          clearTimeout(timeoutId);
+          const elapsedTime = Date.now() - startTime;
+          
+          // Log slow operations for performance monitoring
+          if (elapsedTime > timeoutMs * 0.8) {
+            logger.warn('Slow database operation detected', {
+              operationName,
+              elapsedTimeMs: elapsedTime,
+              timeoutMs,
+              performanceThreshold: timeoutMs * 0.8,
+            });
+          }
+          
+          resolve(result);
+        })
+        .catch(error => {
+          clearTimeout(timeoutId);
+          const elapsedTime = Date.now() - startTime;
+          
+          logger.error('Database operation failed', {
+            operationName,
+            elapsedTimeMs: elapsedTime,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+          
+          reject(error);
+        });
+    });
   }
 }

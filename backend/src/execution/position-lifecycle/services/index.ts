@@ -11,3 +11,4 @@ export { SLTPMonitorService } from './sl-tp-monitor.service';
 export { LiquidationEngineService } from './liquidation-engine.service';
 export { PaperTradingService } from './paper-trading.service';
 export { SystemIntegrityService } from './system-integrity.service';
+export { PartialFillTrackerService, type IPartialFillTracker } from './partial-fill-tracker.service';
