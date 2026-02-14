@@ -1,5 +1,12 @@
 /**
- * Stop Loss and Take Profit Monitoring Service
+ * Stop Loss and Take Profit Monitoring Service - Enhanced with Priority Queue
+ * 
+ * Enhanced with:
+ * - Real-time market data monitoring for stop loss
+ * - Priority queue for stop loss execution
+ * - Optimized trigger response time and execution latency
+ * 
+ * Requirements: 2.3
  */
 
 import { IExecutionTrackingService } from '../interfaces/execution-tracking.interface';
@@ -7,6 +14,7 @@ import { IRiskLedgerService } from '../interfaces/risk-ledger.interface';
 import { IPositionEventService } from '../interfaces/position-event.interface';
 import { Position } from '../interfaces/position-state-machine.interface';
 import { PositionEventType, PositionState } from '../types/position-lifecycle.types';
+import { StopLossPriorityQueueService, StopLossTrigger } from './stop-loss-priority-queue.service';
 
 export interface PriceUpdate {
   symbol: string;
@@ -25,13 +33,26 @@ export interface SLTPTrigger {
 export class SLTPMonitorService {
   private readonly monitoredPositions: Map<string, Position> = new Map();
   private readonly priceSubscriptions: Map<string, number> = new Map(); // symbol -> latest price
+  private readonly priorityQueue: StopLossPriorityQueueService;
+  private readonly marketDataBuffer: Map<string, { price: number; timestamp: Date; volume?: number }> = new Map();
+  private processingInterval?: NodeJS.Timeout;
 
   constructor(
     private readonly positionRepository: any, // Will be injected
     private readonly executionTrackingService: IExecutionTrackingService,
     private readonly riskLedgerService: IRiskLedgerService,
     private readonly eventService: IPositionEventService
-  ) {}
+  ) {
+    // Initialize priority queue with optimized settings
+    this.priorityQueue = new StopLossPriorityQueueService(
+      50, // Process every 50ms for faster response
+      2000, // Larger queue capacity
+      3000 // 3 second timeout per trigger
+    );
+
+    // Start continuous processing
+    this.startContinuousProcessing();
+  }
 
   /**
    * Start monitoring a position for SL/TP triggers
@@ -61,7 +82,15 @@ export class SLTPMonitorService {
    * Update market price and check for triggers
    */
   async updatePrice(priceUpdate: PriceUpdate): Promise<SLTPTrigger[]> {
+    // Update price subscriptions and market data buffer
     this.priceSubscriptions.set(priceUpdate.symbol, priceUpdate.price);
+    this.marketDataBuffer.set(priceUpdate.symbol, {
+      price: priceUpdate.price,
+      timestamp: priceUpdate.timestamp
+    });
+
+    // Update priority queue with new price
+    this.priorityQueue.updateMarketPrice(priceUpdate.symbol, priceUpdate.price);
     
     const triggers: SLTPTrigger[] = [];
     
@@ -70,12 +99,25 @@ export class SLTPMonitorService {
       if (this.getSymbolFromPosition(position) === priceUpdate.symbol) {
         const trigger = await this.checkTriggers(position, priceUpdate.price, priceUpdate.timestamp);
         if (trigger) {
+          // Add to priority queue instead of immediate execution
+          const queueTriggerId = this.priorityQueue.addTrigger({
+            positionId: trigger.positionId,
+            symbol: priceUpdate.symbol,
+            triggerPrice: trigger.triggerPrice,
+            currentPrice: trigger.marketPrice,
+            side: position.side as 'BUY' | 'SELL',
+            triggeredAt: trigger.timestamp,
+            metadata: {
+              triggerType: trigger.triggerType,
+              positionSize: position.size,
+              riskLevel: this.calculateRiskLevel(position, trigger.marketPrice),
+              originalTrigger: trigger
+            }
+          });
+
           triggers.push(trigger);
           
-          // Execute the trigger
-          await this.executeTrigger(trigger);
-          
-          // Stop monitoring this position
+          // Stop monitoring this position (will be handled by queue)
           this.stopMonitoring(positionId);
         }
       }
@@ -216,7 +258,122 @@ export class SLTPMonitorService {
           details: error instanceof Error ? error.message : 'Unknown error'
         }
       );
+      
+      // Re-throw to be handled by priority queue
+      throw error;
     }
+  }
+
+  /**
+   * Start continuous processing of priority queue
+   */
+  private startContinuousProcessing(): void {
+    this.processingInterval = setInterval(async () => {
+      try {
+        const result = await this.priorityQueue.processNextTrigger(async (queueTrigger: StopLossTrigger) => {
+          // Convert queue trigger back to SLTPTrigger format
+          const originalTrigger = queueTrigger.metadata?.originalTrigger;
+          if (originalTrigger) {
+            await this.executeTrigger(originalTrigger);
+          }
+        });
+
+        if (result && !result.success) {
+          console.warn(`Failed to process trigger ${result.triggerId}: ${result.error}`);
+        }
+      } catch (error) {
+        console.error('Error in continuous processing:', error);
+      }
+    }, 25); // Process every 25ms for high-frequency processing
+  }
+
+  /**
+   * Stop continuous processing
+   */
+  private stopContinuousProcessing(): void {
+    if (this.processingInterval) {
+      clearInterval(this.processingInterval);
+      this.processingInterval = undefined;
+    }
+    this.priorityQueue.stopProcessing();
+  }
+
+  /**
+   * Calculate risk level for priority queue
+   */
+  private calculateRiskLevel(position: Position, currentPrice: number): 'LOW' | 'MEDIUM' | 'HIGH' {
+    const unrealizedPnL = this.calculateUnrealizedPnL(position, currentPrice);
+    const positionValue = position.size * position.avgEntryPrice;
+    const riskRatio = Math.abs(unrealizedPnL) / positionValue;
+
+    if (riskRatio > 0.1) return 'HIGH'; // 10%+ risk
+    if (riskRatio > 0.05) return 'MEDIUM'; // 5%+ risk
+    return 'LOW';
+  }
+
+  /**
+   * Calculate unrealized PnL
+   */
+  private calculateUnrealizedPnL(position: Position, currentPrice: number): number {
+    const priceDiff = position.side === 'BUY' 
+      ? currentPrice - position.avgEntryPrice
+      : position.avgEntryPrice - currentPrice;
+    
+    return priceDiff * position.size;
+  }
+
+  /**
+   * Get priority queue statistics
+   */
+  getPriorityQueueStats() {
+    return this.priorityQueue.getQueueStats();
+  }
+
+  /**
+   * Get pending triggers for a position
+   */
+  getPendingTriggersForPosition(positionId: string): StopLossTrigger[] {
+    return this.priorityQueue.getPendingTriggers(positionId);
+  }
+
+  /**
+   * Cancel pending triggers for a position
+   */
+  cancelPendingTriggers(positionId: string): number {
+    return this.priorityQueue.cancelTriggersForPosition(positionId);
+  }
+
+  /**
+   * Optimize queue performance
+   */
+  optimizeQueue(): number {
+    return this.priorityQueue.optimizeQueue();
+  }
+
+  /**
+   * Get market data buffer for analysis
+   */
+  getMarketDataBuffer(): Map<string, { price: number; timestamp: Date; volume?: number }> {
+    return new Map(this.marketDataBuffer);
+  }
+
+  /**
+   * Get average trigger response time
+   */
+  getAverageResponseTime(): number {
+    const stats = this.priorityQueue.getQueueStats();
+    return stats.averageProcessingTimeMs;
+  }
+
+  /**
+   * Shutdown the service gracefully
+   */
+  shutdown(): void {
+    this.stopContinuousProcessing();
+    this.priorityQueue.clear();
+    this.monitoredPositions.clear();
+    this.priceSubscriptions.clear();
+    this.marketDataBuffer.clear();
   }
 
   /**
