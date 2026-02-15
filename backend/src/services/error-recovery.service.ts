@@ -577,7 +577,11 @@ export class ErrorRecoveryService {
           const firstItem = arrayResult[0] as any;
           if (firstItem.timestamp) {
             const timestamps = arrayResult
-              .map((item: any) => item.timestamp)
+              .map((item: any) => {
+                const ts = item.timestamp;
+                // Convert Date objects to timestamps for comparison
+                return ts instanceof Date ? ts.getTime() : ts;
+              })
               .filter(ts => ts !== undefined);
             
             const uniqueTimestamps = new Set(timestamps);

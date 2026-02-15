@@ -292,7 +292,7 @@ describe('ErrorRecoveryService', () => {
         throw new Error('Should have failed data consistency validation');
       } catch (error) {
         expect(error).toBeInstanceOf(Error);
-        expect((error as Error).message).toContain('Data consistency validation failed');
+        expect((error as Error).message).toContain('Data consistency validation failed after recovery');
       }
     });
   });
