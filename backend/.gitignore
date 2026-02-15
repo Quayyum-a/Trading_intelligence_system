@@ -1,6 +1,7 @@
 # Kiro configuration
 .config/
 .kiro/
+.history/
 
 # Dependencies
 node_modules/
