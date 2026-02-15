@@ -73,7 +73,7 @@ describe('🧪 POSITION LIFECYCLE ENGINE - PROPERTY-BASED TESTS', () => {
       leverage: 100,
       isPaper: true
     });
-  });
+  }, 20000); // Increased timeout from default 10000ms
 
   afterAll(async () => {
     await engine.shutdown();

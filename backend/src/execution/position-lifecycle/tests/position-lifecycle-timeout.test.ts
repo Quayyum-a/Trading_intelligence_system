@@ -359,13 +359,16 @@ describe('Position Lifecycle Timeout Handling', () => {
         fc.property(
           fc.record({
             baseTimeout: fc.integer({ min: 1000, max: 5000 }),
-            multiplier: fc.float({ min: 1.0, max: 3.0 }), // Ensure multiplier >= 1.0 for integrity timeout
+            multiplier: fc.float({ min: 1.0, max: 3.0, noNaN: true }), // Ensure multiplier >= 1.0 and no NaN
             progressEnabled: fc.boolean(),
           }),
           (scenario) => {
+            // Guard against NaN values
+            const multiplier = Number.isFinite(scenario.multiplier) ? scenario.multiplier : 1.5;
+            
             const operationTimeout = scenario.baseTimeout;
             const databaseTimeout = Math.floor(scenario.baseTimeout * 0.5);
-            const integrityTimeout = Math.floor(scenario.baseTimeout * scenario.multiplier);
+            const integrityTimeout = Math.floor(scenario.baseTimeout * multiplier);
             const recoveryTimeout = Math.floor(integrityTimeout * 1.5);
 
             const config: PositionLifecycleEngineConfig = {
