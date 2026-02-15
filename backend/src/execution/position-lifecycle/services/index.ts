@@ -12,3 +12,5 @@ export { LiquidationEngineService } from './liquidation-engine.service';
 export { PaperTradingService } from './paper-trading.service';
 export { SystemIntegrityService } from './system-integrity.service';
 export { PartialFillTrackerService, type IPartialFillTracker } from './partial-fill-tracker.service';
+export { TransactionCoordinatorService, type TransactionOptions, type TransactionOperation } from './transaction-coordinator.service';
+export { SupabaseTransactionService } from './supabase-transaction.service';

@@ -1,11 +1,12 @@
 /**
  * Execution Tracking Service - Records and manages trade executions
- * Enhanced with improved partial fill tracking system
+ * Enhanced with improved partial fill tracking system and transaction safety
  */
 
 import { IExecutionTrackingService } from '../interfaces/execution-tracking.interface';
 import { IPositionStateMachine } from '../interfaces/position-state-machine.interface';
 import { IPositionEventService } from '../interfaces/position-event.interface';
+import { TransactionCoordinatorService } from './transaction-coordinator.service';
 import { 
   TradeExecution, 
   ExecutionData, 
@@ -25,7 +26,8 @@ export class ExecutionTrackingService implements IExecutionTrackingService {
     private readonly executionRepository: any, // Will be injected
     private readonly positionRepository: any, // Will be injected
     private readonly stateMachine: IPositionStateMachine,
-    private readonly eventService: IPositionEventService
+    private readonly eventService: IPositionEventService,
+    private readonly transactionCoordinator?: TransactionCoordinatorService
   ) {
     // Initialize the enhanced partial fill tracker
     this.partialFillTracker = new PartialFillTrackerService(
@@ -69,97 +71,115 @@ export class ExecutionTrackingService implements IExecutionTrackingService {
   }
 
   async processPartialFill(positionId: string, fillData: FillData, isEntry: boolean = true): Promise<void> {
-    const position = await this.positionRepository.findById(positionId);
-    if (!position) {
-      throw new Error(`Position ${positionId} not found`);
-    }
-
-    // Determine execution type based on the isEntry parameter and position status
-    let executionType: ExecutionType;
-    
-    if (position.status === PositionState.PENDING) {
-      // Position is still pending, this must be an entry fill
-      executionType = ExecutionType.ENTRY;
-    } else if (position.status === PositionState.OPEN) {
-      // Position is open - use the isEntry parameter to determine type
-      executionType = isEntry ? ExecutionType.ENTRY : ExecutionType.PARTIAL_EXIT;
-    } else {
-      throw new Error(`Cannot process partial fill for position in status ${position.status}`);
-    }
-
-    // Get the original order size (this would typically come from the order management system)
-    // For now, we'll estimate it based on position size and existing fills
-    const orderSize = await this.estimateOrderSize(fillData.orderId, position, fillData.size, executionType);
-
-    // Track the partial fill using the enhanced tracker
-    const partialFill = await this.partialFillTracker.trackPartialFill(
-      positionId, 
-      fillData, 
-      orderSize, 
-      executionType
-    );
-
-    // Record the partial fill execution (this will update the position via updatePositionFromExecution)
-    const executionData: ExecutionData = {
-      positionId,
-      orderId: fillData.orderId,
-      executionType,
-      price: fillData.price,
-      size: fillData.size,
-      executedAt: fillData.executedAt
-    };
-
-    await this.recordExecution(executionData);
-
-    // Check if the order is now complete
-    const isOrderComplete = await this.partialFillTracker.isOrderComplete(fillData.orderId);
-    
-    // If this was an entry fill that opened the position, transition to OPEN state
-    if (position.status === PositionState.PENDING && executionType === ExecutionType.ENTRY) {
-      const event: PositionEvent = {
-        id: randomUUID(),
-        positionId,
-        eventType: isOrderComplete ? PositionEventType.POSITION_OPENED : PositionEventType.PARTIAL_FILL,
-        previousStatus: position.status,
-        newStatus: isOrderComplete ? PositionState.OPEN : PositionState.PENDING,
-        payload: { 
-          fillData, 
-          partialFill,
-          isOrderComplete,
-          remainingSize: await this.partialFillTracker.getRemainingQuantity(fillData.orderId)
-        },
-        createdAt: new Date()
-      };
-
-      if (isOrderComplete) {
-        await this.stateMachine.transitionState(positionId, event);
-      } else {
-        // Just emit the partial fill event without state transition
-        await this.eventService.emitEvent(
-          positionId,
-          PositionEventType.PARTIAL_FILL,
-          event.payload
-        );
+    // Wrap partial fill processing in a transaction for concurrent safety
+    const executePartialFill = async (client?: any) => {
+      const position = await this.positionRepository.findById(positionId);
+      if (!position) {
+        throw new Error(`Position ${positionId} not found`);
       }
-    }
 
-    // Emit detailed partial fill event with tracking information
-    await this.eventService.emitEvent(
-      positionId,
-      PositionEventType.PARTIAL_FILL,
-      {
-        fillId: partialFill.id,
+      // Determine execution type based on the isEntry parameter and position status
+      let executionType: ExecutionType;
+      
+      if (position.status === PositionState.PENDING) {
+        // Position is still pending, this must be an entry fill
+        executionType = ExecutionType.ENTRY;
+      } else if (position.status === PositionState.OPEN) {
+        // Position is open - use the isEntry parameter to determine type
+        executionType = isEntry ? ExecutionType.ENTRY : ExecutionType.PARTIAL_EXIT;
+      } else {
+        throw new Error(`Cannot process partial fill for position in status ${position.status}`);
+      }
+
+      // Get the original order size (this would typically come from the order management system)
+      // For now, we'll estimate it based on position size and existing fills
+      const orderSize = await this.estimateOrderSize(fillData.orderId, position, fillData.size, executionType);
+
+      // Track the partial fill using the enhanced tracker
+      const partialFill = await this.partialFillTracker.trackPartialFill(
+        positionId, 
+        fillData, 
+        orderSize, 
+        executionType
+      );
+
+      // Record the partial fill execution (this will update the position via updatePositionFromExecution)
+      const executionData: ExecutionData = {
+        positionId,
         orderId: fillData.orderId,
         executionType,
         price: fillData.price,
         size: fillData.size,
-        cumulativeSize: partialFill.cumulativeSize,
-        remainingSize: partialFill.remainingSize,
-        fillSequence: partialFill.fillSequence,
-        isOrderComplete,
         executedAt: fillData.executedAt
+      };
+
+      await this.recordExecution(executionData);
+
+      // Check if the order is now complete
+      const isOrderComplete = await this.partialFillTracker.isOrderComplete(fillData.orderId);
+      
+      // If this was an entry fill that opened the position, transition to OPEN state
+      if (position.status === PositionState.PENDING && executionType === ExecutionType.ENTRY) {
+        const event: PositionEvent = {
+          id: randomUUID(),
+          positionId,
+          eventType: isOrderComplete ? PositionEventType.POSITION_OPENED : PositionEventType.PARTIAL_FILL,
+          previousStatus: position.status,
+          newStatus: isOrderComplete ? PositionState.OPEN : PositionState.PENDING,
+          payload: { 
+            fillData, 
+            partialFill,
+            isOrderComplete,
+            remainingSize: await this.partialFillTracker.getRemainingQuantity(fillData.orderId)
+          },
+          createdAt: new Date()
+        };
+
+        if (isOrderComplete) {
+          await this.stateMachine.transitionState(positionId, event);
+        } else {
+          // Just emit the partial fill event without state transition
+          await this.eventService.emitEvent(
+            positionId,
+            PositionEventType.PARTIAL_FILL,
+            event.payload
+          );
+        }
       }
-    );
+
+      // Emit detailed partial fill event with tracking information
+      await this.eventService.emitEvent(
+        positionId,
+        PositionEventType.PARTIAL_FILL,
+        {
+          fillId: partialFill.id,
+          orderId: fillData.orderId,
+          executionType,
+          price: fillData.price,
+          size: fillData.size,
+          cumulativeSize: partialFill.cumulativeSize,
+          remainingSize: partialFill.remainingSize,
+          fillSequence: partialFill.fillSequence,
+          isOrderComplete,
+          executedAt: fillData.executedAt
+        }
+      );
+    };
+
+    // If transaction coordinator is available, use it for atomic operations
+    if (this.transactionCoordinator) {
+      await this.transactionCoordinator.executeInTransaction(
+        executePartialFill,
+        {
+          operationName: 'process_partial_fill',
+          isolationLevel: 'READ COMMITTED',
+          timeoutMs: 5000
+        }
+      );
+    } else {
+      // Fallback to non-transactional execution if coordinator not available
+      await executePartialFill();
+    }
   }
 
   async processFullFill(positionId: string, fillData: FillData): Promise<void> {

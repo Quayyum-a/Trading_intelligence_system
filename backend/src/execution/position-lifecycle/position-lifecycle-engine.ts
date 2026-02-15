@@ -138,7 +138,8 @@ export class PositionLifecycleEngine {
       this.positionRepository,
       this.executionTracking,
       this.riskLedger,
-      this.positionEvent
+      this.positionEvent,
+      this.supabase
     );
 
     this.liquidationEngine = new LiquidationEngineService(

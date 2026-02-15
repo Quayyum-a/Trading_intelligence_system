@@ -30,6 +30,11 @@ export class PositionEventService implements IPositionEventService {
       event.newStatus = payload.newState;
     }
 
+    // Add idempotency key if provided (Requirements: 1.3.1, 1.3.2)
+    if (payload.idempotencyKey) {
+      event.idempotencyKey = payload.idempotencyKey;
+    }
+
     // Save event to database
     await this.eventRepository.create(event);
   }
