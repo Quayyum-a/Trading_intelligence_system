@@ -1,0 +1,285 @@
+{
+  "executedAt": "2026-02-15T12:01:42.080Z",
+  "totalScenarios": 12,
+  "passed": 12,
+  "failed": 0,
+  "successRate": 100,
+  "results": [
+    {
+      "scenario": "Scenario 1: Kill During Trade Open",
+      "success": true,
+      "initialState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T11:58:08.001Z"
+      },
+      "finalState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T11:58:14.006Z"
+      },
+      "issues": [],
+      "recoveryTime": 6008,
+      "executedAt": "2026-02-15T11:58:14.008Z"
+    },
+    {
+      "scenario": "Scenario 2: Kill During Trade Close",
+      "success": true,
+      "initialState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T11:58:24.010Z"
+      },
+      "finalState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T11:58:30.012Z"
+      },
+      "issues": [],
+      "recoveryTime": 6003,
+      "executedAt": "2026-02-15T11:58:30.012Z"
+    },
+    {
+      "scenario": "Scenario 3: Kill During Partial Fill",
+      "success": true,
+      "initialState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T11:58:40.013Z"
+      },
+      "finalState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T11:58:46.026Z"
+      },
+      "issues": [],
+      "recoveryTime": 6013,
+      "executedAt": "2026-02-15T11:58:46.026Z"
+    },
+    {
+      "scenario": "Scenario 4: Kill During Margin Update",
+      "success": true,
+      "initialState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T11:58:56.027Z"
+      },
+      "finalState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T11:59:02.027Z"
+      },
+      "issues": [],
+      "recoveryTime": 6000,
+      "executedAt": "2026-02-15T11:59:02.027Z"
+    },
+    {
+      "scenario": "Scenario 5: Kill During Reconciliation",
+      "success": true,
+      "initialState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T11:59:12.037Z"
+      },
+      "finalState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T11:59:18.041Z"
+      },
+      "issues": [],
+      "recoveryTime": 6004,
+      "executedAt": "2026-02-15T11:59:18.041Z"
+    },
+    {
+      "scenario": "Scenario 6: Kill During Event Replay",
+      "success": true,
+      "initialState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T11:59:28.043Z"
+      },
+      "finalState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T11:59:34.046Z"
+      },
+      "issues": [],
+      "recoveryTime": 6003,
+      "executedAt": "2026-02-15T11:59:34.046Z"
+    },
+    {
+      "scenario": "Scenario 7: Network Drop During Order Placement",
+      "success": true,
+      "initialState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T11:59:44.047Z"
+      },
+      "finalState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T11:59:54.050Z"
+      },
+      "issues": [],
+      "recoveryTime": 10004,
+      "executedAt": "2026-02-15T11:59:54.051Z"
+    },
+    {
+      "scenario": "Scenario 8: Network Drop During Position Close",
+      "success": true,
+      "initialState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T12:00:04.051Z"
+      },
+      "finalState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T12:00:14.054Z"
+      },
+      "issues": [],
+      "recoveryTime": 10004,
+      "executedAt": "2026-02-15T12:00:14.055Z"
+    },
+    {
+      "scenario": "Scenario 9: Slow Network Responses",
+      "success": true,
+      "initialState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T12:00:24.059Z"
+      },
+      "finalState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T12:00:39.065Z"
+      },
+      "issues": [],
+      "recoveryTime": 15007,
+      "executedAt": "2026-02-15T12:00:39.066Z"
+    },
+    {
+      "scenario": "Scenario 10: Database Connection Drop",
+      "success": true,
+      "initialState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T12:00:49.067Z"
+      },
+      "finalState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T12:00:59.069Z"
+      },
+      "issues": [],
+      "recoveryTime": 10003,
+      "executedAt": "2026-02-15T12:00:59.070Z"
+    },
+    {
+      "scenario": "Scenario 11: Database Deadlock",
+      "success": true,
+      "initialState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T12:01:09.071Z"
+      },
+      "finalState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T12:01:17.075Z"
+      },
+      "issues": [],
+      "recoveryTime": 8005,
+      "executedAt": "2026-02-15T12:01:17.076Z"
+    },
+    {
+      "scenario": "Scenario 12: Slow Database Queries",
+      "success": true,
+      "initialState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T12:01:27.077Z"
+      },
+      "finalState": {
+        "positions": [],
+        "balanceEvents": [],
+        "accountBalance": 0,
+        "openPositions": 0,
+        "eventCount": 0,
+        "timestamp": "2026-02-15T12:01:42.080Z"
+      },
+      "issues": [],
+      "recoveryTime": 15003,
+      "executedAt": "2026-02-15T12:01:42.080Z"
+    }
+  ]
+}

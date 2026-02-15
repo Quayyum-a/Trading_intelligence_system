@@ -1,0 +1,68 @@
+{
+  "duration": 300000,
+  "startTime": "2026-02-15T11:53:06.578Z",
+  "endTime": "2026-02-15T11:58:06.578Z",
+  "healthChecks": [
+    {
+      "timestamp": "2026-02-15T11:53:06.579Z",
+      "cpu": 0.554154,
+      "memory": 11.806900024414062,
+      "disk": 0,
+      "databaseConnected": true,
+      "brokerConnected": true
+    },
+    {
+      "timestamp": "2026-02-15T11:54:06.588Z",
+      "cpu": 0.565593,
+      "memory": 11.976806640625,
+      "disk": 0,
+      "databaseConnected": true,
+      "brokerConnected": true
+    },
+    {
+      "timestamp": "2026-02-15T11:55:06.589Z",
+      "cpu": 0.571544,
+      "memory": 12.005386352539062,
+      "disk": 0,
+      "databaseConnected": true,
+      "brokerConnected": true
+    },
+    {
+      "timestamp": "2026-02-15T11:56:06.593Z",
+      "cpu": 0.576665,
+      "memory": 12.023811340332031,
+      "disk": 0,
+      "databaseConnected": true,
+      "brokerConnected": true
+    },
+    {
+      "timestamp": "2026-02-15T11:57:06.602Z",
+      "cpu": 0.581535,
+      "memory": 12.041465759277344,
+      "disk": 0,
+      "databaseConnected": true,
+      "brokerConnected": true
+    }
+  ],
+  "positionChecks": [
+    {
+      "timestamp": "2026-02-15T11:53:06.579Z",
+      "openPositions": 0,
+      "accountBalance": 0,
+      "marginUsed": 0,
+      "reconciliationStatus": "MATCHED"
+    }
+  ],
+  "integrityChecks": [
+    {
+      "timestamp": "2026-02-15T11:53:06.580Z",
+      "balanceEquation": true,
+      "orphanedEvents": 0,
+      "orphanedPositions": 0,
+      "eventCoverage": 100
+    }
+  ],
+  "alerts": [],
+  "criticalErrors": [],
+  "passed": true
+}

@@ -1,0 +1,17 @@
+{
+  "coverage": {
+    "totalPositions": 0,
+    "positionsWithCompleteEvents": 0,
+    "missingEvents": [],
+    "coveragePercentage": 100
+  },
+  "balanceCheck": {
+    "totalEvents": 0,
+    "validEvents": 0,
+    "invalidEvents": [],
+    "passed": true
+  },
+  "discrepancies": [],
+  "passed": true,
+  "executedAt": "2026-02-15T12:01:43.233Z"
+}
