@@ -22,7 +22,18 @@
     "indicators:verify": "tsx src/database/setup-indicators.ts verify",
     "indicators:drop": "tsx src/database/setup-indicators.ts drop",
     "indicators:test": "tsx src/scripts/test-indicator-setup.ts",
-    "test:position-lifecycle": "tsx src/execution/position-lifecycle/tests/run-tests.ts"
+    "test:position-lifecycle": "tsx src/execution/position-lifecycle/tests/run-tests.ts",
+    "test:phase-7": "tsx run-phase-7-war-testing.ts",
+    "test:72-hour": "tsx src/war-testing/scripts/run-72-hour-test.ts",
+    "test:chaos": "tsx src/war-testing/scripts/run-chaos-scenarios.ts",
+    "test:audit": "tsx src/war-testing/scripts/run-manual-audit.ts",
+    "test:live-capital": "tsx src/war-testing/scripts/run-live-capital-test.ts",
+    "verify:phase-7": "tsx verify-phase-7.ts",
+    "migrate:discipline": "node scripts/run-discipline-migration.js",
+    "discipline:report": "tsx src/discipline/scripts/discipline-report.ts",
+    "discipline:history": "tsx src/discipline/scripts/discipline-history.ts",
+    "discipline:cost": "tsx src/discipline/scripts/discipline-cost.ts",
+    "test:discipline": "tsx test-discipline-guardian.ts"
   },
   "keywords": [
     "trading",
