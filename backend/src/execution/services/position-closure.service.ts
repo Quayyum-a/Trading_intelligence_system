@@ -1,5 +1,6 @@
 /**
  * Position Closure Service - Handles position closure for TP/SL hits and manual closes
+ * Enhanced with TransactionCoordinator for atomic operations
  */
 
 import { BrokerAdapter } from '../interfaces/broker-adapter.interface';
@@ -7,6 +8,7 @@ import { PositionManagerService } from './position-manager.service';
 import { TradeEventLoggerService } from './trade-event-logger.service';
 import { PnLCalculatorService } from './pnl-calculator.service';
 import { getSupabaseClient } from '../../config/supabase';
+import { TransactionCoordinatorService } from '../position-lifecycle/services/transaction-coordinator.service';
 import { 
   ExecutionCloseReason, 
   Position, 
@@ -39,8 +41,15 @@ export class PositionClosureService {
     private brokerAdapter: BrokerAdapter,
     private positionManager: PositionManagerService,
     private eventLogger: TradeEventLoggerService,
-    private pnlCalculator: PnLCalculatorService
-  ) {}
+    private pnlCalculator: PnLCalculatorService,
+    private transactionCoordinator?: TransactionCoordinatorService
+  ) {
+    // Initialize transaction coordinator if not provided
+    if (!this.transactionCoordinator) {
+      const supabase = getSupabaseClient();
+      this.transactionCoordinator = new TransactionCoordinatorService(supabase);
+    }
+  }
 
   /**
    * Close a position with specified reason
@@ -119,36 +128,56 @@ export class PositionClosureService {
     closePrice: number,
     metadata?: Record<string, any>
   ): Promise<PositionCloseResult> {
-    // Place closing order with broker
-    await this.placeClosingOrder(position, closePrice);
+    // Wrap all closure operations in a transaction for atomicity
+    return await this.transactionCoordinator!.executeInTransaction(
+      async (client) => {
+        // Place closing order with broker (outside transaction - broker is external)
+        await this.placeClosingOrder(position, closePrice);
 
-    // Calculate realized PnL
-    const realizedPnL = this.pnlCalculator.calculateRealizedPnL(
-      position,
-      closePrice,
-      position.openedAt,
-      new Date()
+        // Calculate realized PnL
+        const realizedPnL = this.pnlCalculator.calculateRealizedPnL(
+          position,
+          closePrice,
+          position.openedAt,
+          new Date()
+        );
+
+        // Update position in database (within transaction)
+        await this.positionManager.closePosition(position.id, 'TP');
+
+        // Log take profit hit event (within transaction)
+        await this.eventLogger.logTakeProfitHit(position.executionTradeId, {
+          positionId: position.id,
+          closePrice,
+          realizedPnL: realizedPnL.realizedPnL,
+          ...metadata
+        });
+
+        // Task 9.1: Create PNL_REALIZED event (Requirement 3.1.1)
+        // This must be done in the same transaction as position closure
+        if (this.positionManager.riskLedgerService) {
+          await this.positionManager.riskLedgerService.realizePnL(
+            position.id,
+            realizedPnL.realizedPnL,
+            'TP'
+          );
+        }
+
+        return {
+          success: true,
+          positionId: position.id,
+          closePrice,
+          realizedPnL: realizedPnL.realizedPnL,
+          closeReason: 'TP',
+          closeTime: new Date()
+        };
+      },
+      {
+        operationName: 'take_profit_closure',
+        isolationLevel: 'READ COMMITTED',
+        timeoutMs: 5000
+      }
     );
-
-    // Update position in database
-    await this.positionManager.closePosition(position.id, 'TP');
-
-    // Log take profit hit event
-    await this.eventLogger.logTakeProfitHit(position.executionTradeId, {
-      positionId: position.id,
-      closePrice,
-      realizedPnL: realizedPnL.realizedPnL,
-      ...metadata
-    });
-
-    return {
-      success: true,
-      positionId: position.id,
-      closePrice,
-      realizedPnL: realizedPnL.realizedPnL,
-      closeReason: 'TP',
-      closeTime: new Date()
-    };
   }
 
   /**
@@ -159,36 +188,56 @@ export class PositionClosureService {
     closePrice: number,
     metadata?: Record<string, any>
   ): Promise<PositionCloseResult> {
-    // Place closing order with broker
-    await this.placeClosingOrder(position, closePrice);
+    // Wrap all closure operations in a transaction for atomicity
+    return await this.transactionCoordinator!.executeInTransaction(
+      async (client) => {
+        // Place closing order with broker (outside transaction - broker is external)
+        await this.placeClosingOrder(position, closePrice);
 
-    // Calculate realized PnL
-    const realizedPnL = this.pnlCalculator.calculateRealizedPnL(
-      position,
-      closePrice,
-      position.openedAt,
-      new Date()
+        // Calculate realized PnL
+        const realizedPnL = this.pnlCalculator.calculateRealizedPnL(
+          position,
+          closePrice,
+          position.openedAt,
+          new Date()
+        );
+
+        // Update position in database (within transaction)
+        await this.positionManager.closePosition(position.id, 'SL');
+
+        // Log stop loss hit event (within transaction)
+        await this.eventLogger.logStopLossHit(position.executionTradeId, {
+          positionId: position.id,
+          closePrice,
+          realizedPnL: realizedPnL.realizedPnL,
+          ...metadata
+        });
+
+        // Task 9.1: Create PNL_REALIZED event (Requirement 3.1.1)
+        // This must be done in the same transaction as position closure
+        if (this.positionManager.riskLedgerService) {
+          await this.positionManager.riskLedgerService.realizePnL(
+            position.id,
+            realizedPnL.realizedPnL,
+            'SL'
+          );
+        }
+
+        return {
+          success: true,
+          positionId: position.id,
+          closePrice,
+          realizedPnL: realizedPnL.realizedPnL,
+          closeReason: 'SL',
+          closeTime: new Date()
+        };
+      },
+      {
+        operationName: 'stop_loss_closure',
+        isolationLevel: 'READ COMMITTED',
+        timeoutMs: 5000
+      }
     );
-
-    // Update position in database
-    await this.positionManager.closePosition(position.id, 'SL');
-
-    // Log stop loss hit event
-    await this.eventLogger.logStopLossHit(position.executionTradeId, {
-      positionId: position.id,
-      closePrice,
-      realizedPnL: realizedPnL.realizedPnL,
-      ...metadata
-    });
-
-    return {
-      success: true,
-      positionId: position.id,
-      closePrice,
-      realizedPnL: realizedPnL.realizedPnL,
-      closeReason: 'SL',
-      closeTime: new Date()
-    };
   }
 
   /**
@@ -199,36 +248,56 @@ export class PositionClosureService {
     closePrice: number,
     metadata?: Record<string, any>
   ): Promise<PositionCloseResult> {
-    // Place closing order with broker
-    await this.placeClosingOrder(position, closePrice);
+    // Wrap all closure operations in a transaction for atomicity
+    return await this.transactionCoordinator!.executeInTransaction(
+      async (client) => {
+        // Place closing order with broker (outside transaction - broker is external)
+        await this.placeClosingOrder(position, closePrice);
 
-    // Calculate realized PnL
-    const realizedPnL = this.pnlCalculator.calculateRealizedPnL(
-      position,
-      closePrice,
-      position.openedAt,
-      new Date()
+        // Calculate realized PnL
+        const realizedPnL = this.pnlCalculator.calculateRealizedPnL(
+          position,
+          closePrice,
+          position.openedAt,
+          new Date()
+        );
+
+        // Update position in database (within transaction)
+        await this.positionManager.closePosition(position.id, 'MANUAL');
+
+        // Log manual close event (within transaction)
+        await this.eventLogger.logManualClose(position.executionTradeId, {
+          positionId: position.id,
+          closePrice,
+          realizedPnL: realizedPnL.realizedPnL,
+          ...metadata
+        });
+
+        // Task 9.1: Create PNL_REALIZED event (Requirement 3.1.1)
+        // This must be done in the same transaction as position closure
+        if (this.positionManager.riskLedgerService) {
+          await this.positionManager.riskLedgerService.realizePnL(
+            position.id,
+            realizedPnL.realizedPnL,
+            'MANUAL'
+          );
+        }
+
+        return {
+          success: true,
+          positionId: position.id,
+          closePrice,
+          realizedPnL: realizedPnL.realizedPnL,
+          closeReason: 'MANUAL',
+          closeTime: new Date()
+        };
+      },
+      {
+        operationName: 'manual_closure',
+        isolationLevel: 'READ COMMITTED',
+        timeoutMs: 5000
+      }
     );
-
-    // Update position in database
-    await this.positionManager.closePosition(position.id, 'MANUAL');
-
-    // Log manual close event
-    await this.eventLogger.logManualClose(position.executionTradeId, {
-      positionId: position.id,
-      closePrice,
-      realizedPnL: realizedPnL.realizedPnL,
-      ...metadata
-    });
-
-    return {
-      success: true,
-      positionId: position.id,
-      closePrice,
-      realizedPnL: realizedPnL.realizedPnL,
-      closeReason: 'MANUAL',
-      closeTime: new Date()
-    };
   }
 
   /**
@@ -239,44 +308,64 @@ export class PositionClosureService {
     closePrice: number,
     metadata?: Record<string, any>
   ): Promise<PositionCloseResult> {
-    try {
-      // Attempt to place closing order with broker
-      await this.placeClosingOrder(position, closePrice);
-    } catch (brokerError) {
-      logger.warn('Failed to place closing order with broker during error closure', {
-        positionId: position.id,
-        error: brokerError instanceof Error ? brokerError.message : 'Unknown error'
-      });
-    }
+    // Wrap all closure operations in a transaction for atomicity
+    return await this.transactionCoordinator!.executeInTransaction(
+      async (client) => {
+        try {
+          // Attempt to place closing order with broker
+          await this.placeClosingOrder(position, closePrice);
+        } catch (brokerError) {
+          logger.warn('Failed to place closing order with broker during error closure', {
+            positionId: position.id,
+            error: brokerError instanceof Error ? brokerError.message : 'Unknown error'
+          });
+        }
 
-    // Calculate realized PnL
-    const realizedPnL = this.pnlCalculator.calculateRealizedPnL(
-      position,
-      closePrice,
-      position.openedAt,
-      new Date()
+        // Calculate realized PnL
+        const realizedPnL = this.pnlCalculator.calculateRealizedPnL(
+          position,
+          closePrice,
+          position.openedAt,
+          new Date()
+        );
+
+        // Update position in database (within transaction)
+        await this.positionManager.closePosition(position.id, 'ERROR');
+
+        // Log error event (within transaction)
+        await this.eventLogger.logError(position.executionTradeId, {
+          positionId: position.id,
+          closePrice,
+          realizedPnL: realizedPnL.realizedPnL,
+          errorType: 'POSITION_CLOSURE_ERROR',
+          ...metadata
+        });
+
+        // Task 9.1: Create PNL_REALIZED event (Requirement 3.1.1)
+        // This must be done in the same transaction as position closure
+        if (this.positionManager.riskLedgerService) {
+          await this.positionManager.riskLedgerService.realizePnL(
+            position.id,
+            realizedPnL.realizedPnL,
+            'ERROR'
+          );
+        }
+
+        return {
+          success: true,
+          positionId: position.id,
+          closePrice,
+          realizedPnL: realizedPnL.realizedPnL,
+          closeReason: 'ERROR',
+          closeTime: new Date()
+        };
+      },
+      {
+        operationName: 'error_closure',
+        isolationLevel: 'READ COMMITTED',
+        timeoutMs: 5000
+      }
     );
-
-    // Update position in database
-    await this.positionManager.closePosition(position.id, 'ERROR');
-
-    // Log error event
-    await this.eventLogger.logError(position.executionTradeId, {
-      positionId: position.id,
-      closePrice,
-      realizedPnL: realizedPnL.realizedPnL,
-      errorType: 'POSITION_CLOSURE_ERROR',
-      ...metadata
-    });
-
-    return {
-      success: true,
-      positionId: position.id,
-      closePrice,
-      realizedPnL: realizedPnL.realizedPnL,
-      closeReason: 'ERROR',
-      closeTime: new Date()
-    };
   }
 
   /**
@@ -418,6 +507,7 @@ export class PositionClosureService {
     totalRealizedPnL: number;
   }> {
     try {
+      const supabase = getSupabaseClient();
       const timeframeDays = timeframe === 'day' ? 1 : timeframe === 'week' ? 7 : 30;
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - timeframeDays);

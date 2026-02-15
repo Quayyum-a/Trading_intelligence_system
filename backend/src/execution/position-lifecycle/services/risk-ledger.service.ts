@@ -237,19 +237,89 @@ export class RiskLedgerService implements IRiskLedgerService {
     };
   }
 
+  /**
+   * Task 9.1: Create balance event with proper field names and validation
+   * Requirements: 3.1.2, 3.1.3, 3.1.5, 3.1.6
+   */
   private async createBalanceEvent(accountId: string, eventType: string, payload: any): Promise<void> {
+    // Get current account balance to ensure accuracy
+    const account = await this.accountRepository.findById(accountId);
+    if (!account) {
+      throw new Error(`Cannot create balance event: Account ${accountId} not found`);
+    }
+
+    // Calculate balance_before, amount, and balance_after
+    // Requirement 3.1.6: No zero defaults - all fields must be explicitly set
+    const balance_before = payload.previousBalance !== undefined ? payload.previousBalance : account.balance;
+    const amount = payload.amount;
+    const balance_after = payload.newBalance !== undefined ? payload.newBalance : balance_before + amount;
+
+    // Requirement 3.1.3: Validate balance equation before insert
+    if (Math.abs(balance_after - (balance_before + amount)) > 0.0001) {
+      throw new Error(
+        `Balance equation violation: balance_after (${balance_after}) != balance_before (${balance_before}) + amount (${amount})`
+      );
+    }
+
+    // Requirement 3.1.2: Create event with all required fields
     const event: AccountBalanceEvent = {
       id: randomUUID(),
       accountId,
       eventType,
-      previousBalance: payload.previousBalance || 0,
-      newBalance: payload.newBalance || 0,
-      change: payload.amount || 0,
+      balance_before,      // Updated field name (Task 8.1)
+      balance_after,       // Updated field name (Task 8.1)
+      amount,              // Updated field name (Task 8.1)
       reason: payload.reason || eventType,
+      positionId: payload.positionId,
+      executionId: payload.executionId,
       createdAt: new Date()
     };
 
+    // Requirement 3.2.3: Create event before balance update (in same transaction)
     await this.balanceEventRepository.create(event);
+  }
+
+  /**
+   * Task 9.1: Create PNL_REALIZED event on position closure
+   * Requirements: 3.1.1, 3.1.2, 3.1.5
+   * 
+   * This method MUST be called when a position closes to record the realized PnL
+   */
+  async realizePnL(positionId: string, pnlAmount: number, closeReason: string): Promise<void> {
+    // Get position to find account
+    const position = await this.positionRepository.findById(positionId);
+    if (!position) {
+      throw new Error(`Position ${positionId} not found`);
+    }
+
+    const accountId = position.accountId || 'default';
+    const account = await this.accountRepository.findById(accountId);
+    if (!account) {
+      throw new Error(`Account ${accountId} not found`);
+    }
+
+    const balance_before = account.balance;
+    const balance_after = balance_before + pnlAmount;
+
+    // Update account balance
+    const updatedAccount: AccountBalance = {
+      ...account,
+      balance: balance_after,
+      equity: account.equity + pnlAmount,
+      freeMargin: account.freeMargin + pnlAmount,
+      updatedAt: new Date()
+    };
+
+    await this.accountRepository.update(accountId, updatedAccount);
+
+    // Requirement 3.1.1: Create PNL_REALIZED event for every position closure
+    await this.createBalanceEvent(accountId, 'PNL_REALIZED', {
+      amount: pnlAmount,
+      previousBalance: balance_before,
+      newBalance: balance_after,
+      reason: `Position closed: ${closeReason}`,
+      positionId
+    });
   }
 
   private calculateLiquidationLoss(position: any, liquidationPrice: number): number {

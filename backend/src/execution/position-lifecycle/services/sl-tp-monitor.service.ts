@@ -1,12 +1,14 @@
 /**
- * Stop Loss and Take Profit Monitoring Service - Enhanced with Priority Queue
+ * Stop Loss and Take Profit Monitoring Service - Enhanced with Priority Queue and Idempotency
  * 
  * Enhanced with:
  * - Real-time market data monitoring for stop loss
  * - Priority queue for stop loss execution
  * - Optimized trigger response time and execution latency
+ * - Idempotency guarantees to prevent double-close
+ * - Transaction-safe atomic closure operations
  * 
- * Requirements: 2.3
+ * Requirements: 1.1.1, 1.1.2, 1.1.3, 1.3.1, 1.3.2, 2.3
  */
 
 import { IExecutionTrackingService } from '../interfaces/execution-tracking.interface';
@@ -15,6 +17,8 @@ import { IPositionEventService } from '../interfaces/position-event.interface';
 import { Position } from '../interfaces/position-state-machine.interface';
 import { PositionEventType, PositionState } from '../types/position-lifecycle.types';
 import { StopLossPriorityQueueService, StopLossTrigger } from './stop-loss-priority-queue.service';
+import { TransactionCoordinatorService } from './transaction-coordinator.service';
+import { createClient } from '@supabase/supabase-js';
 
 export interface PriceUpdate {
   symbol: string;
@@ -36,13 +40,18 @@ export class SLTPMonitorService {
   private readonly priorityQueue: StopLossPriorityQueueService;
   private readonly marketDataBuffer: Map<string, { price: number; timestamp: Date; volume?: number }> = new Map();
   private processingInterval?: NodeJS.Timeout;
+  private readonly transactionCoordinator: TransactionCoordinatorService;
 
   constructor(
     private readonly positionRepository: any, // Will be injected
     private readonly executionTrackingService: IExecutionTrackingService,
     private readonly riskLedgerService: IRiskLedgerService,
-    private readonly eventService: IPositionEventService
+    private readonly eventService: IPositionEventService,
+    private readonly supabase: ReturnType<typeof createClient>
   ) {
+    // Initialize transaction coordinator for atomic operations
+    this.transactionCoordinator = new TransactionCoordinatorService(supabase);
+
     // Initialize priority queue with optimized settings
     this.priorityQueue = new StopLossPriorityQueueService(
       50, // Process every 50ms for faster response
@@ -76,6 +85,41 @@ export class SLTPMonitorService {
    */
   stopMonitoring(positionId: string): void {
     this.monitoredPositions.delete(positionId);
+  }
+
+  /**
+   * Generate idempotency key for position closure
+   * Format: close_${positionId}_${timestamp}
+   * Requirements: 1.3.1
+   */
+  private generateIdempotencyKey(positionId: string, timestamp: Date): string {
+    const timestampMs = timestamp.getTime();
+    return `close_${positionId}_${timestampMs}`;
+  }
+
+  /**
+   * Check if an idempotency key already exists in position_events
+   * Returns true if the key exists (duplicate request)
+   * Requirements: 1.3.1, 1.3.2
+   */
+  private async checkIdempotencyKey(idempotencyKey: string): Promise<boolean> {
+    try {
+      const { data, error } = await this.supabase
+        .from('position_events')
+        .select('id')
+        .eq('idempotency_key', idempotencyKey)
+        .limit(1);
+
+      if (error) {
+        console.error('Error checking idempotency key:', error);
+        return false;
+      }
+
+      return data && data.length > 0;
+    } catch (error) {
+      console.error('Exception checking idempotency key:', error);
+      return false;
+    }
   }
 
   /**
@@ -197,67 +241,98 @@ export class SLTPMonitorService {
   }
 
   /**
-   * Execute a triggered SL or TP
+   * Execute a triggered SL or TP with idempotency and transaction safety
+   * Requirements: 1.1.1, 1.1.2, 1.1.3, 1.3.1, 1.3.2
    */
   private async executeTrigger(trigger: SLTPTrigger): Promise<void> {
-    try {
-      if (trigger.triggerType === 'STOP_LOSS') {
-        await this.executionTrackingService.triggerStopLoss(
-          trigger.positionId, 
-          trigger.marketPrice
-        );
-        
-        // Emit stop loss triggered event
-        await this.eventService.emitEvent(
-          trigger.positionId,
-          PositionEventType.STOP_LOSS_TRIGGERED,
-          {
-            triggerPrice: trigger.triggerPrice,
-            marketPrice: trigger.marketPrice,
-            timestamp: trigger.timestamp
-          }
-        );
-      } else {
-        await this.executionTrackingService.triggerTakeProfit(
-          trigger.positionId, 
-          trigger.marketPrice
-        );
-        
-        // Emit take profit triggered event
-        await this.eventService.emitEvent(
-          trigger.positionId,
-          PositionEventType.TAKE_PROFIT_TRIGGERED,
-          {
-            triggerPrice: trigger.triggerPrice,
-            marketPrice: trigger.marketPrice,
-            timestamp: trigger.timestamp
-          }
-        );
-      }
+    // Generate idempotency key
+    const idempotencyKey = this.generateIdempotencyKey(trigger.positionId, trigger.timestamp);
 
-      // Update account balance immediately with realized PnL
-      const position = await this.positionRepository.findById(trigger.positionId);
-      if (position && position.realizedPnL !== 0) {
-        await this.riskLedgerService.updateAccountBalance({
-          accountId: position.accountId || 'default',
-          amount: position.realizedPnL,
-          reason: trigger.triggerType === 'STOP_LOSS' ? 'STOP_LOSS_REALIZED' : 'TAKE_PROFIT_REALIZED',
-          positionId: trigger.positionId
-        });
-      }
+    // Check if this closure has already been processed
+    const isDuplicate = await this.checkIdempotencyKey(idempotencyKey);
+    if (isDuplicate) {
+      console.log(`Position ${trigger.positionId} closure already processed (idempotency key: ${idempotencyKey}). Returning success.`);
+      return; // Idempotent: return success for duplicate requests
+    }
+
+    try {
+      // Execute closure within a transaction for atomicity
+      await this.transactionCoordinator.executeInTransaction(async (client) => {
+        // Double-check position is still OPEN (within transaction lock)
+        const position = await this.positionRepository.findById(trigger.positionId);
+        if (!position) {
+          throw new Error(`Position ${trigger.positionId} not found`);
+        }
+
+        if (position.status !== PositionState.OPEN) {
+          console.log(`Position ${trigger.positionId} is already ${position.status}. Skipping closure.`);
+          return; // Position already closed
+        }
+
+        // Create position event with idempotency key FIRST (before any state changes)
+        const eventType = trigger.triggerType === 'STOP_LOSS' 
+          ? PositionEventType.STOP_LOSS_TRIGGERED 
+          : PositionEventType.TAKE_PROFIT_TRIGGERED;
+
+        await this.eventService.emitEvent(
+          trigger.positionId,
+          eventType,
+          {
+            triggerPrice: trigger.triggerPrice,
+            marketPrice: trigger.marketPrice,
+            timestamp: trigger.timestamp,
+            idempotencyKey // Include idempotency key in event
+          }
+        );
+
+        // Execute the actual closure
+        if (trigger.triggerType === 'STOP_LOSS') {
+          await this.executionTrackingService.triggerStopLoss(
+            trigger.positionId, 
+            trigger.marketPrice
+          );
+        } else {
+          await this.executionTrackingService.triggerTakeProfit(
+            trigger.positionId, 
+            trigger.marketPrice
+          );
+        }
+
+        // Update account balance with realized PnL
+        const updatedPosition = await this.positionRepository.findById(trigger.positionId);
+        if (updatedPosition && updatedPosition.realizedPnL !== 0) {
+          await this.riskLedgerService.updateAccountBalance({
+            accountId: updatedPosition.accountId || 'default',
+            amount: updatedPosition.realizedPnL,
+            reason: trigger.triggerType === 'STOP_LOSS' ? 'STOP_LOSS_REALIZED' : 'TAKE_PROFIT_REALIZED',
+            positionId: trigger.positionId
+          });
+        }
+
+        console.log(`Successfully executed ${trigger.triggerType} for position ${trigger.positionId} with idempotency key ${idempotencyKey}`);
+      }, {
+        isolationLevel: 'READ COMMITTED',
+        timeoutMs: 5000,
+        maxRetries: 3
+      });
 
     } catch (error) {
       console.error(`Failed to execute ${trigger.triggerType} for position ${trigger.positionId}:`, error);
       
-      // Emit error event
-      await this.eventService.emitEvent(
-        trigger.positionId,
-        PositionEventType.POSITION_UPDATED,
-        {
-          error: `Failed to execute ${trigger.triggerType}`,
-          details: error instanceof Error ? error.message : 'Unknown error'
-        }
-      );
+      // Emit error event (outside transaction since transaction was rolled back)
+      try {
+        await this.eventService.emitEvent(
+          trigger.positionId,
+          PositionEventType.POSITION_UPDATED,
+          {
+            error: `Failed to execute ${trigger.triggerType}`,
+            details: error instanceof Error ? error.message : 'Unknown error',
+            idempotencyKey
+          }
+        );
+      } catch (eventError) {
+        console.error('Failed to emit error event:', eventError);
+      }
       
       // Re-throw to be handled by priority queue
       throw error;
