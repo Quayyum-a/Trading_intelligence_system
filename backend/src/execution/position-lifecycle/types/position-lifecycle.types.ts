@@ -43,6 +43,16 @@ export enum CloseReason {
   LIQUIDATION = 'LIQUIDATION'
 }
 
+// Balance Event Types (Task 9 - Ledger Completeness)
+export enum BalanceEventType {
+  MARGIN_RESERVED = 'MARGIN_RESERVED',      // When position opens (Requirement 3.2.1)
+  MARGIN_RELEASED = 'MARGIN_RELEASED',      // When position closes (Requirement 3.2.1)
+  PNL_REALIZED = 'PNL_REALIZED',            // When position closes with profit/loss (Requirement 3.1.1)
+  LIQUIDATION_LOSS = 'LIQUIDATION_LOSS',    // When position is liquidated
+  DEPOSIT = 'DEPOSIT',                       // Manual deposit
+  WITHDRAWAL = 'WITHDRAWAL'                  // Manual withdrawal
+}
+
 /**
  * Core Data Models
  */
@@ -65,6 +75,7 @@ export interface PositionEvent {
   previousStatus?: PositionState;
   newStatus?: PositionState;
   payload: Record<string, any>;
+  idempotencyKey?: string; // For idempotent operations (Requirements: 1.3.1, 1.3.2)
   createdAt: Date;
 }
 
@@ -83,10 +94,12 @@ export interface AccountBalanceEvent {
   id: string;
   accountId: string;
   eventType: string;
-  previousBalance: number;
-  newBalance: number;
-  change: number;
+  balance_before: number;  // Renamed from previousBalance (Task 8.1)
+  balance_after: number;   // Renamed from newBalance (Task 8.1)
+  amount: number;          // Renamed from change (Task 8.1)
   reason: string;
+  positionId?: string;     // Optional reference to position
+  executionId?: string;    // Optional reference to execution
   createdAt: Date;
 }
 
